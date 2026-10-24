@@ -1,540 +1,492 @@
-"""
-Experimento Prático — Quando os dados não rotulados ajudam?
-DECOM-DV | Engenharia de Computação | Tópicos Especiais em Aprendizado de Máquina
-Execução completa para Wine e Breast Cancer (Wisconsin Diagnostic).
-"""
-
-import sys
-import io
-import time
+import argparse
 import json
+import os
+import sys
+import time
 import warnings
+
 import numpy as np
-import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from sklearn.datasets import load_wine, load_breast_cancer
-from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.semi_supervised import SelfTrainingClassifier, LabelPropagation, LabelSpreading
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
 from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.semi_supervised import (LabelPropagation, LabelSpreading,
+                                     SelfTrainingClassifier)
 
-warnings.filterwarnings("ignore")
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
-def run_experiment_for_dataset(name, load_fn, random_state=73):
-    print(f"\n=======================================================")
-    print(f"       EXECUTANDO EXPERIMENTO PARA: {name.upper()}")
-    print(f"=======================================================")
-    
-    data = load_fn()
-    X = data.data
-    y = data.target
-    feature_names = data.feature_names
-    target_names = [str(t) for t in data.target_names]
-    n_samples, n_features = X.shape
-    classes, class_counts = np.unique(y, return_counts=True)
-    n_classes = len(classes)
-    
-    info = {
-        "dataset_name": name,
-        "n_samples": n_samples,
-        "n_features": n_features,
-        "classes": target_names,
-        "class_distribution": dict(zip(target_names, [int(c) for c in class_counts])),
-        "missing_values": int(np.isnan(X).sum())
-    }
-    print(f"Dataset: {n_samples} amostras, {n_features} atributos, {n_classes} classes: {info['class_distribution']}")
-    
-    # -------------------------------------------------------------
-    # ETAPA 1: DIVISÃO E MASCARAMENTO
-    # 20% Teste, 80% Treino (random_state=73)
-    # -------------------------------------------------------------
-    X_train_orig, X_test_orig, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=random_state, stratify=y
-    )
-    
-    # Padronização ajustada SOMENTE no treino
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train_orig)
-    X_test = scaler.transform(X_test_orig)
-    
-    # Mascaramento: revelar 10% por classe no treino (L), ocultar os demais (U = -1)
-    # Garantir pelo menos 1 amostra por classe em L
-    np.random.seed(random_state)
+# Exibe cada aviso (ex.: ConvergenceWarning) uma vez, em vez de ignorá-los.
+warnings.simplefilter("once")
+
+SEED = 73
+DATASETS = {
+    "wine": {
+        "loader": load_wine,
+        "title": "Wine (UCI Machine Learning Repository)",
+        "url": "https://archive.ics.uci.edu/dataset/109/wine",
+    },
+    "breast_cancer": {
+        "loader": load_breast_cancer,
+        "title": "Breast Cancer Wisconsin (Diagnostic) (UCI)",
+        "url": "https://archive.ics.uci.edu/dataset/17/breast+cancer+wisconsin+diagnostic",
+    },
+}
+
+
+# ----------------------------------------------------------------------------
+# Funções auxiliares
+# ----------------------------------------------------------------------------
+def make_semi_labels(y_train, frac, seed):
+    """Revela `frac` dos rótulos por classe (mín. 1). Retorna y_semi (-1 = U) e índices de L."""
+    rng = np.random.RandomState(seed)
     y_semi = np.full_like(y_train, -1)
-    labeled_indices = []
-    
-    for c in classes:
-        c_indices = np.where(y_train == c)[0]
-        n_c = len(c_indices)
-        n_labeled_c = max(1, int(np.round(0.10 * n_c)))
-        selected = np.random.choice(c_indices, size=n_labeled_c, replace=False)
-        y_semi[selected] = c
-        labeled_indices.extend(selected)
-        
-    labeled_indices = np.array(sorted(labeled_indices))
-    unlabeled_indices = np.where(y_semi == -1)[0]
-    
-    X_L = X_train[labeled_indices]
-    y_L = y_train[labeled_indices]
-    X_U = X_train[unlabeled_indices]
-    y_U_true = y_train[unlabeled_indices]
-    
-    print(f"Treino total: {len(y_train)} (L: {len(labeled_indices)}, U: {len(unlabeled_indices)}) | Teste: {len(y_test)}")
-    for c in classes:
-        print(f"  Classe {target_names[c]}: Total Treino={np.sum(y_train==c)}, L={np.sum(y_L==c)}, U={np.sum(y_U_true==c)}")
+    lab = []
+    for c in np.unique(y_train):
+        idx = np.where(y_train == c)[0]
+        n_c = max(1, int(np.round(frac * len(idx))))
+        sel = rng.choice(idx, size=n_c, replace=False)
+        y_semi[sel] = c
+        lab.extend(sel.tolist())
+    return y_semi, np.array(sorted(lab))
 
-    # -------------------------------------------------------------
-    # ETAPA 2: SUPERVISIONADO (REFERÊNCIAS)
-    # -------------------------------------------------------------
-    # Teto: 100% supervisionado
-    clf_full = LogisticRegression(max_iter=1000, random_state=random_state)
-    t0 = time.time()
-    clf_full.fit(X_train, y_train)
-    t_full = time.time() - t0
-    y_pred_full = clf_full.predict(X_test)
-    f1_full = f1_score(y_test, y_pred_full, average="macro")
-    acc_full = accuracy_score(y_test, y_pred_full)
 
-    # Baseline: Supervisionado apenas com L
-    clf_few = LogisticRegression(max_iter=1000, random_state=random_state)
-    t0 = time.time()
-    clf_few.fit(X_L, y_L)
-    t_few = time.time() - t0
-    y_pred_few = clf_few.predict(X_test)
-    f1_few = f1_score(y_test, y_pred_few, average="macro")
-    acc_few = accuracy_score(y_test, y_pred_few)
-    cm_few = confusion_matrix(y_test, y_pred_few).tolist()
-    
-    print(f"\n[ETAPA 2] Supervisionado Full: F1={f1_full:.4f}, Acc={acc_full:.4f}, Tempo={t_full:.4f}s")
-    print(f"[ETAPA 2] Baseline (Somente L): F1={f1_few:.4f}, Acc={acc_few:.4f}, Tempo={t_few:.4f}s")
-
-    # -------------------------------------------------------------
-    # ETAPA 3: SELF-TRAINING COM DIFERENTES THRESHOLDS
-    # -------------------------------------------------------------
-    st_results = []
-    thresholds = [0.60, 0.75, 0.95]
-    for tau in thresholds:
-        base_lr = LogisticRegression(max_iter=1000, random_state=random_state)
-        st_clf = SelfTrainingClassifier(base_lr, threshold=tau, max_iter=10)
-        t0 = time.time()
-        st_clf.fit(X_train, y_semi)
-        t_st = time.time() - t0
-        
-        y_pred_test = st_clf.predict(X_test)
-        f1_test = f1_score(y_test, y_pred_test, average="macro")
-        acc_test = accuracy_score(y_test, y_pred_test)
-        
-        # Auditoria de pseudorrótulos aceitos
-        # Em st_clf.transduction_: rótulos finais inferidos para todo X_train
-        # Exemplos incorporados em U: aqueles onde y_semi == -1 e st_clf.labeled_iter_ > 0
-        accepted_mask = (y_semi == -1) & (st_clf.labeled_iter_ > 0)
-        n_accepted = int(np.sum(accepted_mask))
-        n_U = len(unlabeled_indices)
-        
-        if n_accepted > 0:
-            pseudo_labels = st_clf.transduction_[accepted_mask]
-            true_labels_accepted = y_train[accepted_mask]
-            prec_accepted = float(accuracy_score(true_labels_accepted, pseudo_labels))
-        else:
-            prec_accepted = 0.0
-            
-        n_iter = int(st_clf.n_iter_)
-        st_results.append({
-            "threshold": tau,
-            "f1_score": float(f1_test),
-            "accuracy": float(acc_test),
-            "n_accepted": n_accepted,
-            "total_u": n_U,
-            "coverage_ratio": float(n_accepted / n_U) if n_U > 0 else 0.0,
-            "precision_accepted": prec_accepted,
-            "n_iter": n_iter,
-            "time_s": float(t_st)
-        })
-        print(f"[ETAPA 3] Self-Training (tau={tau}): F1={f1_test:.4f}, Aceitos={n_accepted}/{n_U} ({prec_accepted*100:.1f}% precisão), Iters={n_iter}, Tempo={t_st:.4f}s")
-
-    # -------------------------------------------------------------
-    # ETAPA 4: CO-TRAINING
-    # Divisão em Visão A (índices pares) e Visão B (índices ímpares)
-    # -------------------------------------------------------------
-    view_A_cols = [i for i in range(n_features) if i % 2 == 0]
-    view_B_cols = [i for i in range(n_features) if i % 2 != 0]
-    
-    # Avaliar visões isoladamente com LogisticRegression no conjunto L
-    clf_A_init = LogisticRegression(max_iter=1000, random_state=random_state)
-    clf_A_init.fit(X_L[:, view_A_cols], y_L)
-    acc_A_init = accuracy_score(y_test, clf_A_init.predict(X_test[:, view_A_cols]))
-    f1_A_init = f1_score(y_test, clf_A_init.predict(X_test[:, view_A_cols]), average="macro")
-    
-    clf_B_init = LogisticRegression(max_iter=1000, random_state=random_state)
-    clf_B_init.fit(X_L[:, view_B_cols], y_L)
-    acc_B_init = accuracy_score(y_test, clf_B_init.predict(X_test[:, view_B_cols]))
-    f1_B_init = f1_score(y_test, clf_B_init.predict(X_test[:, view_B_cols]), average="macro")
-    
-    print(f"\n[ETAPA 4] Visão A isolada: F1={f1_A_init:.4f}, Acc={acc_A_init:.4f}")
-    print(f"[ETAPA 4] Visão B isolada: F1={f1_B_init:.4f}, Acc={acc_B_init:.4f}")
-    
-    # Execução do Co-Training: 3 rodadas, até 5 amostras com conf >= 0.85
-    # L_A e L_B começam com os índices de L
-    idx_L_A = list(labeled_indices)
-    idx_L_B = list(labeled_indices)
-    pool_U = list(unlabeled_indices)
-    
-    co_rounds = []
-    total_transferred = 0
-    total_disagreements = 0
-    total_audited_errors = 0
-    
-    t0_co = time.time()
-    for r in range(1, 4):
-        if len(pool_U) == 0:
-            break
-            
-        model_A = LogisticRegression(max_iter=1000, random_state=random_state)
-        model_A.fit(X_train[idx_L_A][:, view_A_cols], y_train[idx_L_A])
-        
-        model_B = LogisticRegression(max_iter=1000, random_state=random_state)
-        model_B.fit(X_train[idx_L_B][:, view_B_cols], y_train[idx_L_B])
-        
-        # Probabilidades sobre o pool U restante
-        probs_A = model_A.predict_proba(X_train[pool_U][:, view_A_cols])
-        probs_B = model_B.predict_proba(X_train[pool_U][:, view_B_cols])
-        
-        max_prob_A = np.max(probs_A, axis=1)
-        pred_class_A = np.argmax(probs_A, axis=1)
-        
-        max_prob_B = np.max(probs_B, axis=1)
-        pred_class_B = np.argmax(probs_B, axis=1)
-        
-        # Selecionar candidatos com conf >= 0.85 (até 5)
-        candidates_A_idx_in_pool = np.where(max_prob_A >= 0.85)[0]
-        # Ordenar pelos mais confiantes decrescente
-        candidates_A_idx_in_pool = candidates_A_idx_in_pool[np.argsort(-max_prob_A[candidates_A_idx_in_pool])][:5]
-        
-        candidates_B_idx_in_pool = np.where(max_prob_B >= 0.85)[0]
-        candidates_B_idx_in_pool = candidates_B_idx_in_pool[np.argsort(-max_prob_B[candidates_B_idx_in_pool])][:5]
-        
-        cand_A_actual = [pool_U[i] for i in candidates_A_idx_in_pool]
-        cand_B_actual = [pool_U[i] for i in candidates_B_idx_in_pool]
-        
-        # Identificar amostras em comum e verificar se há divergência
-        common = set(cand_A_actual).intersection(set(cand_B_actual))
-        discard = set()
-        for idx in common:
-            pos = pool_U.index(idx)
-            if pred_class_A[pos] != pred_class_B[pos]:
-                discard.add(idx)
-                total_disagreements += 1
-                
-        # Atualização:
-        # A ensina B: cand_A adicionado a L_B
-        # B ensina A: cand_B adicionado a L_A
-        to_add_to_B = []
-        for i_in_pool in candidates_A_idx_in_pool:
-            actual_idx = pool_U[i_in_pool]
-            if actual_idx not in discard:
-                lbl = pred_class_A[i_in_pool]
-                to_add_to_B.append((actual_idx, lbl))
-                if lbl != y_train[actual_idx]:
-                    total_audited_errors += 1
-                    
-        to_add_to_A = []
-        for i_in_pool in candidates_B_idx_in_pool:
-            actual_idx = pool_U[i_in_pool]
-            if actual_idx not in discard:
-                lbl = pred_class_B[i_in_pool]
-                to_add_to_A.append((actual_idx, lbl))
-                if lbl != y_train[actual_idx]:
-                    total_audited_errors += 1
-
-        # Aplicar adições
-        incorporated_this_round = set()
-        for idx, lbl in to_add_to_B:
-            if idx not in idx_L_B:
-                idx_L_B.append(idx)
-                incorporated_this_round.add(idx)
-        for idx, lbl in to_add_to_A:
-            if idx not in idx_L_A:
-                idx_L_A.append(idx)
-                incorporated_this_round.add(idx)
-                
-        # Remover de pool_U
-        pool_U = [idx for idx in pool_U if idx not in incorporated_this_round]
-        total_transferred += len(incorporated_this_round)
-        
-        co_rounds.append({
-            "round": r,
-            "transferred_round": len(incorporated_this_round),
-            "pool_U_remaining": len(pool_U),
-            "disagreements": len(discard)
-        })
-        
-    t_co = time.time() - t0_co
-    
-    # Avaliar modelos finais no teste
-    final_model_A = LogisticRegression(max_iter=1000, random_state=random_state)
-    final_model_A.fit(X_train[idx_L_A][:, view_A_cols], y_train[idx_L_A])
-    pred_test_A = final_model_A.predict(X_test[:, view_A_cols])
-    f1_co_A = f1_score(y_test, pred_test_A, average="macro")
-    acc_co_A = accuracy_score(y_test, pred_test_A)
-    
-    final_model_B = LogisticRegression(max_iter=1000, random_state=random_state)
-    final_model_B.fit(X_train[idx_L_B][:, view_B_cols], y_train[idx_L_B])
-    pred_test_B = final_model_B.predict(X_test[:, view_B_cols])
-    f1_co_B = f1_score(y_test, pred_test_B, average="macro")
-    acc_co_B = accuracy_score(y_test, pred_test_B)
-    
-    best_co_model = "A" if f1_co_A >= f1_co_B else "B"
-    best_f1_co = max(f1_co_A, f1_co_B)
-    best_acc_co = acc_co_A if best_co_model == "A" else acc_co_B
-    
-    print(f"[ETAPA 4] Co-Training Concluído: Modelo A (F1={f1_co_A:.4f}), Modelo B (F1={f1_co_B:.4f}), Melhor={best_co_model}")
-    print(f"         Total transferidos={total_transferred}, Desacordos={total_disagreements}, Erros auditados={total_audited_errors}, Tempo={t_co:.4f}s")
-
-    # -------------------------------------------------------------
-    # ETAPA 5: LABEL PROPAGATION
-    # k = 3, 5, 15
-    # -------------------------------------------------------------
-    lp_results = []
-    k_values = [3, 5, 15]
-    for k in k_values:
-        lp = LabelPropagation(kernel="knn", n_neighbors=k)
-        t0 = time.time()
-        lp.fit(X_train, y_semi)
-        t_lp = time.time() - t0
-        
-        y_pred_test = lp.predict(X_test)
-        f1_test = f1_score(y_test, y_pred_test, average="macro")
-        acc_test = accuracy_score(y_test, y_pred_test)
-        
-        # Acertos nos rótulos ocultos de U (transdução em U)
-        pred_U = lp.transduction_[unlabeled_indices]
-        acc_U = accuracy_score(y_U_true, pred_U)
-        n_hits_U = int(np.sum(pred_U == y_U_true))
-        
-        lp_results.append({
-            "k": k,
-            "f1_score": float(f1_test),
-            "accuracy": float(acc_test),
-            "hits_u": f"{n_hits_U}/{len(y_U_true)}",
-            "acc_u": float(acc_U),
-            "time_s": float(t_lp)
-        })
-        print(f"[ETAPA 5] Label Propagation (k={k}): F1={f1_test:.4f}, Acertos em U={n_hits_U}/{len(y_U_true)} ({acc_U*100:.1f}%), Tempo={t_lp:.4f}s")
-
-    # -------------------------------------------------------------
-    # ETAPA 6: LABEL SPREADING E SEMENTES ERRADAS
-    # -------------------------------------------------------------
-    # Cenário 1: Sementes corretas
-    lp_clean = LabelPropagation(kernel="knn", n_neighbors=5)
-    lp_clean.fit(X_train, y_semi)
-    f1_lp_clean = f1_score(y_test, lp_clean.predict(X_test), average="macro")
-    
-    ls_clean_02 = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2)
-    ls_clean_02.fit(X_train, y_semi)
-    f1_ls_clean_02 = f1_score(y_test, ls_clean_02.predict(X_test), average="macro")
-    acc_ls_clean_02 = accuracy_score(y_test, ls_clean_02.predict(X_test))
-    
-    ls_clean_08 = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.8)
-    ls_clean_08.fit(X_train, y_semi)
-    f1_ls_clean_08 = f1_score(y_test, ls_clean_08.predict(X_test), average="macro")
-
-    # Cenário 2: 1 a 2 sementes deliberadamente alteradas
-    y_semi_noisy = np.copy(y_semi)
-    # Selecionar 1 ou 2 sementes rotuladas e trocar por classe incorreta
-    np.random.seed(random_state)
-    n_corrupt = 2 if len(labeled_indices) >= 6 else 1
-    corrupt_indices = np.random.choice(labeled_indices, size=n_corrupt, replace=False)
-    original_classes = y_semi[corrupt_indices]
-    
-    for idx in corrupt_indices:
-        orig = y_semi[idx]
-        other_classes = [c for c in classes if c != orig]
-        y_semi_noisy[idx] = np.random.choice(other_classes)
-        
-    print(f"[ETAPA 6] Sementes corrompidas ({n_corrupt}): Índices {corrupt_indices}, Classes originais {original_classes} -> Trocadas para {y_semi_noisy[corrupt_indices]}")
-    
-    # Testar com sementes ruidosas
-    lp_noisy = LabelPropagation(kernel="knn", n_neighbors=5)
-    lp_noisy.fit(X_train, y_semi_noisy)
-    f1_lp_noisy = f1_score(y_test, lp_noisy.predict(X_test), average="macro")
-    
-    ls_noisy_02 = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2)
-    ls_noisy_02.fit(X_train, y_semi_noisy)
-    f1_ls_noisy_02 = f1_score(y_test, ls_noisy_02.predict(X_test), average="macro")
-    pred_corrupt_02 = ls_noisy_02.transduction_[corrupt_indices]
-    
-    ls_noisy_08 = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.8)
-    ls_noisy_08.fit(X_train, y_semi_noisy)
-    f1_ls_noisy_08 = f1_score(y_test, ls_noisy_08.predict(X_test), average="macro")
-    pred_corrupt_08 = ls_noisy_08.transduction_[corrupt_indices]
-    
-    print(f"[ETAPA 6] Sementes Limpas: LP F1={f1_lp_clean:.4f} | LS(a=0.2) F1={f1_ls_clean_02:.4f} | LS(a=0.8) F1={f1_ls_clean_08:.4f}")
-    print(f"[ETAPA 6] Sementes Ruidosas: LP F1={f1_lp_noisy:.4f} | LS(a=0.2) F1={f1_ls_noisy_02:.4f} | LS(a=0.8) F1={f1_ls_noisy_08:.4f}")
-    print(f"         Predições finais nas sementes corrompidas: a=0.2 -> {pred_corrupt_02.tolist()}, a=0.8 -> {pred_corrupt_08.tolist()} (Gabarito real: {original_classes.tolist()})")
-
-    # -------------------------------------------------------------
-    # ETAPA 7: DESAFIO DE ESTRESSE
-    # (A) Variação da proporção de rótulos: 5%, 10%, 20%
-    # (B) Perturbação gaussiana em 20% de U
-    # (C) Múltiplas sementes: 21, 42, 84
-    # -------------------------------------------------------------
-    fractions = [0.05, 0.10, 0.20]
-    seeds = [21, 42, 84]
-    
-    stress_results = {f"{int(frac*100)}%": {"baseline": [], "self_training": [], "label_spreading": []} for frac in fractions}
-    
-    for frac in fractions:
-        for s in seeds:
-            np.random.seed(s)
-            y_s = np.full_like(y_train, -1)
-            lab_idx = []
-            for c in classes:
-                c_idx = np.where(y_train == c)[0]
-                n_lab = max(1, int(np.round(frac * len(c_idx))))
-                sel = np.random.choice(c_idx, size=n_lab, replace=False)
-                y_s[sel] = c
-                lab_idx.extend(sel)
-            
-            # Baseline
-            m_base = LogisticRegression(max_iter=1000, random_state=s)
-            m_base.fit(X_train[lab_idx], y_train[lab_idx])
-            f1_b = f1_score(y_test, m_base.predict(X_test), average="macro")
-            stress_results[f"{int(frac*100)}%"]["baseline"].append(f1_b)
-            
-            # Self-Training (tau=0.75)
-            m_st = SelfTrainingClassifier(LogisticRegression(max_iter=1000, random_state=s), threshold=0.75, max_iter=10)
-            m_st.fit(X_train, y_s)
-            f1_s = f1_score(y_test, m_st.predict(X_test), average="macro")
-            stress_results[f"{int(frac*100)}%"]["self_training"].append(f1_s)
-            
-            # Label Spreading (a=0.2)
-            m_ls = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2)
-            m_ls.fit(X_train, y_s)
-            f1_l = f1_score(y_test, m_ls.predict(X_test), average="macro")
-            stress_results[f"{int(frac*100)}%"]["label_spreading"].append(f1_l)
-
-    # Perturbação de 20% em U (ruído gaussiano)
-    np.random.seed(random_state)
-    n_noisy_u = int(0.20 * len(unlabeled_indices))
-    noisy_u_idx = np.random.choice(unlabeled_indices, size=n_noisy_u, replace=False)
-    
-    X_train_perturbed = np.copy(X_train)
-    # Adicionar ruído gaussiano moderado (média 0, std 0.5)
-    noise = np.random.normal(loc=0.0, scale=0.5, size=X_train_perturbed[noisy_u_idx].shape)
-    X_train_perturbed[noisy_u_idx] += noise
-    
-    # Avaliar com U perturbado
-    st_perturbed = SelfTrainingClassifier(LogisticRegression(max_iter=1000, random_state=random_state), threshold=0.75, max_iter=10)
-    st_perturbed.fit(X_train_perturbed, y_semi)
-    f1_st_perturbed = f1_score(y_test, st_perturbed.predict(X_test), average="macro")
-    
-    ls_perturbed = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2)
-    ls_perturbed.fit(X_train_perturbed, y_semi)
-    f1_ls_perturbed = f1_score(y_test, ls_perturbed.predict(X_test), average="macro")
-    
-    print(f"\n[ETAPA 7] Efeito do Ruído em U (20% das amostras de U corrompidas):")
-    print(f"         Self-Training: F1 limpo={st_results[1]['f1_score']:.4f} -> F1 perturbado={f1_st_perturbed:.4f}")
-    print(f"         Label Spreading: F1 limpo={f1_ls_clean_02:.4f} -> F1 perturbado={f1_ls_perturbed:.4f}")
-    
-    # -------------------------------------------------------------
-    # SÍNTESE FINAL
-    # -------------------------------------------------------------
-    summary = {
-        "dataset": info,
-        "step1_split": {
-            "n_train": len(y_train),
-            "n_test": len(y_test),
-            "n_L": len(labeled_indices),
-            "n_U": len(unlabeled_indices)
-        },
-        "step2_baseline": {
-            "full_f1": f1_full,
-            "full_acc": acc_full,
-            "full_time": t_full,
-            "few_f1": f1_few,
-            "few_acc": acc_few,
-            "few_time": t_few,
-            "cm_few": cm_few
-        },
-        "step3_self_training": st_results,
-        "step4_co_training": {
-            "view_A_init_f1": f1_A_init,
-            "view_B_init_f1": f1_B_init,
-            "final_f1_A": f1_co_A,
-            "final_f1_B": f1_co_B,
-            "best_f1": best_f1_co,
-            "best_acc": best_acc_co,
-            "best_view": best_co_model,
-            "total_transferred": total_transferred,
-            "disagreements": total_disagreements,
-            "audited_errors": total_audited_errors,
-            "time_s": t_co,
-            "rounds": co_rounds
-        },
-        "step5_label_propagation": lp_results,
-        "step6_label_spreading": {
-            "clean": {
-                "propagation_f1": f1_lp_clean,
-                "spreading_02_f1": f1_ls_clean_02,
-                "spreading_08_f1": f1_ls_clean_08
-            },
-            "noisy": {
-                "propagation_f1": f1_lp_noisy,
-                "spreading_02_f1": f1_ls_noisy_02,
-                "spreading_08_f1": f1_ls_noisy_08,
-                "corrupted_indices": corrupt_indices.tolist(),
-                "original_classes": original_classes.tolist(),
-                "noisy_classes": y_semi_noisy[corrupt_indices].tolist(),
-                "pred_corrupt_02": pred_corrupt_02.tolist(),
-                "pred_corrupt_08": pred_corrupt_08.tolist()
-            }
-        },
-        "step7_stress": {
-            "multi_seed_fractions": {
-                frac_str: {
-                    model: {
-                        "mean": float(np.mean(vals)),
-                        "std": float(np.std(vals)),
-                        "runs": vals
-                    } for model, vals in models.items()
-                } for frac_str, models in stress_results.items()
-            },
-            "u_perturbation": {
-                "st_clean_f1": st_results[1]["f1_score"],
-                "st_perturbed_f1": f1_st_perturbed,
-                "ls_clean_f1": f1_ls_clean_02,
-                "ls_perturbed_f1": f1_ls_perturbed
-            }
-        },
-        "consolidated_table": [
-            {"model": "Supervisionado - somente L", "f1": f1_few, "acc": acc_few, "time": t_few, "obs": "Apenas 10% dos rótulos por classe (baseline restrito)"},
-            {"model": "Supervisionado - todos os rótulos", "f1": f1_full, "acc": acc_full, "time": t_full, "obs": "Teto teórico (oráculo com 100% dos rótulos de treino)"},
-            {"model": "Self-Training (tau=0.75)", "f1": st_results[1]["f1_score"], "acc": st_results[1]["accuracy"], "time": st_results[1]["time_s"], "obs": f"{st_results[1]['n_accepted']} pseudorrótulos aceitos ({st_results[1]['precision_accepted']*100:.1f}% precisão)"},
-            {"model": f"Co-Training - visão {best_co_model}", "f1": best_f1_co, "acc": best_acc_co, "time": t_co, "obs": f"{total_transferred} amostras transferidas, {total_disagreements} discordâncias"},
-            {"model": "Label Propagation (k=5)", "f1": lp_results[1]["f1_score"], "acc": lp_results[1]["accuracy"], "time": lp_results[1]["time_s"], "obs": f"Acertos em U: {lp_results[1]['hits_u']} ({lp_results[1]['acc_u']*100:.1f}%)"},
-            {"model": "Label Spreading (k=5, alpha=0.2)", "f1": f1_ls_clean_02, "acc": acc_ls_clean_02, "time": t_lp, "obs": "Difusão com regularização e soft clamping"}
-        ]
+def evaluate(y_true, y_pred):
+    return {
+        "f1": float(f1_score(y_true, y_pred, average="macro")),
+        "acc": float(accuracy_score(y_true, y_pred)),
+        "cm": confusion_matrix(y_true, y_pred).tolist(),
     }
-    
-    return summary
+
+
+def lr(seed=SEED):
+    return LogisticRegression(max_iter=1000, random_state=seed)
+
+
+def mean_std(vals):
+    return {"mean": float(np.mean(vals)), "std": float(np.std(vals)),
+            "runs": [float(v) for v in vals]}
+
+
+# ----------------------------------------------------------------------------
+# Co-Training simplificado (sem uso de rótulos reais de U no treinamento)
+# ----------------------------------------------------------------------------
+def co_training(X_train, y_train, labeled_idx, unlabeled_idx, view_A, view_B,
+                rounds=3, max_per_round=5, conf=0.85, seed=SEED):
+    """
+    y_train só é consultado para (i) rótulos de L e (ii) AUDITORIA dos
+    pseudorrótulos. Os rótulos usados no treino de U são os pseudorrótulos.
+    """
+    # Conjuntos rotulados separados: LA (treina o modelo A) e LB (treina o modelo B)
+    idx_LA = list(labeled_idx); y_LA = list(y_train[labeled_idx])
+    idx_LB = list(labeled_idx); y_LB = list(y_train[labeled_idx])
+    pool = list(unlabeled_idx)
+
+    total_transferred = 0
+    total_audit_errors = 0
+    disagreed_samples = set()          # amostras distintas em desacordo
+    round_log = []
+
+    for r in range(1, rounds + 1):
+        if not pool:
+            break
+
+        mA = lr(seed).fit(X_train[idx_LA][:, view_A], y_LA)
+        mB = lr(seed).fit(X_train[idx_LB][:, view_B], y_LB)
+
+        Xp = X_train[pool]
+        pA = mA.predict_proba(Xp[:, view_A])
+        pB = mB.predict_proba(Xp[:, view_B])
+        confA, confB = pA.max(axis=1), pB.max(axis=1)
+        # converter índice do argmax para o rótulo real da classe
+        predA = mA.classes_[pA.argmax(axis=1)]
+        predB = mB.classes_[pB.argmax(axis=1)]
+
+        def top_candidates(conf_vec):
+            c = np.where(conf_vec >= conf)[0]
+            return c[np.argsort(-conf_vec[c])][:max_per_round]
+
+        candA = top_candidates(confA)      # posições no pool
+        candB = top_candidates(confB)
+
+        # Divergência: ambos propuseram a mesma amostra com rótulos diferentes
+        pos_common = set(candA.tolist()) & set(candB.tolist())
+        discard = {p for p in pos_common if predA[p] != predB[p]}
+        disagreed_samples.update(pool[p] for p in discard)
+
+        # A ensina B ; B ensina A (somente pseudorrótulos)
+        add_to_B = {pool[p]: predA[p] for p in candA if p not in discard}
+        add_to_A = {pool[p]: predB[p] for p in candB if p not in discard}
+
+        incorporated = set()
+        for idx, lbl in add_to_B.items():
+            if idx not in idx_LB:
+                idx_LB.append(idx); y_LB.append(lbl)
+                incorporated.add(idx)
+                total_audit_errors += int(lbl != y_train[idx])   # auditoria apenas
+        for idx, lbl in add_to_A.items():
+            if idx not in idx_LA:
+                idx_LA.append(idx); y_LA.append(lbl)
+                incorporated.add(idx)
+                total_audit_errors += int(lbl != y_train[idx])   # auditoria apenas
+
+        # Cada exemplo só é incorporado uma vez: sai do pool
+        pool = [i for i in pool if i not in incorporated]
+        total_transferred += len(incorporated)
+        round_log.append({
+            "round": r,
+            "transferred_round": len(incorporated),
+            "to_A": len(add_to_A), "to_B": len(add_to_B),
+            "disagreements_round": len(discard),
+            "pool_U_remaining": len(pool),
+        })
+
+    mA = lr(seed).fit(X_train[idx_LA][:, view_A], y_LA)
+    mB = lr(seed).fit(X_train[idx_LB][:, view_B], y_LB)
+    return {
+        "model_A": mA, "model_B": mB,
+        "total_transferred": total_transferred,
+        "total_audit_errors": total_audit_errors,
+        "unique_disagreements": len(disagreed_samples),
+        "rounds": round_log,
+        "n_LA": len(idx_LA), "n_LB": len(idx_LB),
+    }
+
+
+# ----------------------------------------------------------------------------
+# Figuras
+# ----------------------------------------------------------------------------
+def plot_etapa5(name, X_train, y_train, labeled_idx, y_inferred, classes, target_names, out):
+    is_L = np.zeros(len(y_train), dtype=bool)
+    is_L[labeled_idx] = True
+    emb = {
+        "PCA": PCA(n_components=2, random_state=SEED).fit_transform(X_train),
+        "t-SNE": TSNE(n_components=2, random_state=SEED,
+                      perplexity=min(30, max(5, (len(X_train) - 1) // 4))).fit_transform(X_train),
+    }
+    cmap = plt.get_cmap("tab10")
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    for r, (title, Z) in enumerate(emb.items()):
+        ax = axes[r, 0]
+        ax.scatter(Z[~is_L, 0], Z[~is_L, 1], c="lightgray", s=18, label="U (sem rótulo)")
+        for c in classes:
+            m = is_L & (y_train == c)
+            ax.scatter(Z[m, 0], Z[m, 1], color=cmap(c), s=80, edgecolor="k",
+                       marker="*", label=f"L: {target_names[c]}")
+        ax.set_title(f"{title} — L vs U"); ax.legend(fontsize=7)
+
+        ax = axes[r, 1]
+        for c in classes:
+            m = y_inferred == c
+            ax.scatter(Z[m, 0], Z[m, 1], color=cmap(c), s=18, label=target_names[c])
+        ax.set_title(f"{title} — rótulos inferidos (Label Prop. k=5)"); ax.legend(fontsize=7)
+
+        ax = axes[r, 2]
+        for c in classes:
+            m = y_train == c
+            ax.scatter(Z[m, 0], Z[m, 1], color=cmap(c), s=18, label=target_names[c])
+        ax.set_title(f"{title} — rótulos reais (apenas auditoria)"); ax.legend(fontsize=7)
+    fig.suptitle(f"{name}: distribuição 2D (somente descritivo)")
+    fig.tight_layout()
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+
+
+def plot_etapa7(name, stress, out):
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    labels = {"baseline": "Supervisionado (só L)", "self_training": "Self-Training (τ=0,75)",
+              "label_spreading": "Label Spreading (k=5, α=0,2)"}
+    for model, lab in labels.items():
+        xs = [stress[f]["n_labels_mean"] for f in stress]
+        ys = [stress[f][model]["mean"] for f in stress]
+        es = [stress[f][model]["std"] for f in stress]
+        ax.errorbar(xs, ys, yerr=es, marker="o", capsize=3, label=lab)
+    ax.set_xlabel("Nº de rótulos em L (média)")
+    ax.set_ylabel("F1-score (macro) no teste")
+    ax.set_title(f"{name}: F1 × nº de rótulos (média ± dp, 3 sementes)")
+    ax.grid(alpha=.3); ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+
+
+# ----------------------------------------------------------------------------
+# Experimento principal
+# ----------------------------------------------------------------------------
+def run_experiment(name, cfg, out_dir):
+    print("\n" + "=" * 60)
+    print(f"  EXPERIMENTO: {name.upper()}")
+    print("=" * 60)
+
+    data = cfg["loader"]()
+    X, y = data.data, data.target
+    target_names = [str(t) for t in data.target_names]
+    classes, counts = np.unique(y, return_counts=True)
+    n_features = X.shape[1]
+
+    # ---------------- ETAPA 1 ----------------
+    info = {
+        "title": cfg["title"], "url": cfg["url"],
+        "n_samples": int(X.shape[0]), "n_features": int(n_features),
+        "classes": target_names,
+        "class_distribution": dict(zip(target_names, map(int, counts))),
+        "missing_values": int(np.isnan(X).sum()),
+    }
+    print(f"[ETAPA 1] {info}")
+
+    # 20% teste (random_state=73). Estratificado (decisão documentada; o enunciado não exige).
+    X_tr_raw, X_te_raw, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=SEED, stratify=y)
+    scaler = StandardScaler()                       # ajustado SOMENTE no treino
+    X_train = scaler.fit_transform(X_tr_raw)
+    X_test = scaler.transform(X_te_raw)
+
+    y_semi, labeled_idx = make_semi_labels(y_train, 0.10, SEED)
+    unlabeled_idx = np.where(y_semi == -1)[0]
+    X_L, y_L = X_train[labeled_idx], y_train[labeled_idx]
+    y_U_true = y_train[unlabeled_idx]               # SOMENTE auditoria
+    n_U = len(unlabeled_idx)
+    print(f"[ETAPA 1] Treino={len(y_train)} (L={len(labeled_idx)}, U={n_U}) | Teste={len(y_test)}")
+    for c in classes:
+        print(f"          {target_names[c]}: treino={np.sum(y_train == c)}, "
+              f"L={np.sum(y_L == c)}, U={np.sum(y_U_true == c)}")
+
+    results = {"dataset": info,
+               "step1_split": {"n_train": int(len(y_train)), "n_test": int(len(y_test)),
+                               "n_L": int(len(labeled_idx)), "n_U": int(n_U),
+                               "f1_average": "macro"}}
+
+    # ---------------- ETAPA 2 ----------------
+    t0 = time.time(); m_full = lr().fit(X_train, y_train); t_full = time.time() - t0
+    ev_full = evaluate(y_test, m_full.predict(X_test))
+    t0 = time.time(); m_few = lr().fit(X_L, y_L); t_few = time.time() - t0
+    ev_few = evaluate(y_test, m_few.predict(X_test))
+    print(f"[ETAPA 2] Todos os rótulos: F1={ev_full['f1']:.4f} Acc={ev_full['acc']:.4f} t={t_full:.4f}s")
+    print(f"[ETAPA 2] Somente L       : F1={ev_few['f1']:.4f} Acc={ev_few['acc']:.4f} t={t_few:.4f}s")
+    print(f"[ETAPA 2] Perda de F1 por reduzir rótulos: {ev_full['f1'] - ev_few['f1']:.4f}")
+    results["step2_baseline"] = {"full": {**ev_full, "time_s": t_full},
+                                 "few": {**ev_few, "time_s": t_few},
+                                 "f1_loss": ev_full["f1"] - ev_few["f1"]}
+
+    # ---------------- ETAPA 3: SELF-TRAINING ----------------
+    st_results = []
+    for tau in (0.60, 0.75, 0.95):
+        st = SelfTrainingClassifier(lr(), threshold=tau, max_iter=10)
+        t0 = time.time(); st.fit(X_train, y_semi); t_st = time.time() - t0
+        ev = evaluate(y_test, st.predict(X_test))
+        accepted = (y_semi == -1) & (st.labeled_iter_ > 0)
+        n_acc = int(accepted.sum())
+        prec = float(accuracy_score(y_train[accepted], st.transduction_[accepted])) if n_acc else None
+        st_results.append({"threshold": tau, **ev, "n_accepted": n_acc, "total_u": int(n_U),
+                           "coverage": n_acc / n_U, "precision_accepted": prec,
+                           "n_iter": int(st.n_iter_), "time_s": t_st})
+        prec_txt = f"{prec * 100:.1f}%" if prec is not None else "n/a"
+        print(f"[ETAPA 3] τ={tau}: F1={ev['f1']:.4f} Aceitos={n_acc}/{n_U} "
+              f"(precisão {prec_txt}) iters={st.n_iter_} t={t_st:.4f}s")
+    results["step3_self_training"] = st_results
+    st_075 = st_results[1]
+
+    # ---------------- ETAPA 4: CO-TRAINING ----------------
+    view_A = [i for i in range(n_features) if i % 2 == 0]
+    view_B = [i for i in range(n_features) if i % 2 != 0]
+    init = {}
+    for v, cols in (("A", view_A), ("B", view_B)):
+        m = lr().fit(X_L[:, cols], y_L)
+        init[v] = evaluate(y_test, m.predict(X_test[:, cols]))
+        print(f"[ETAPA 4] Visão {v} isolada (só L): F1={init[v]['f1']:.4f} Acc={init[v]['acc']:.4f}")
+
+    t0 = time.time()
+    co = co_training(X_train, y_train, labeled_idx, unlabeled_idx, view_A, view_B)
+    t_co = time.time() - t0
+    evA = evaluate(y_test, co["model_A"].predict(X_test[:, view_A]))
+    evB = evaluate(y_test, co["model_B"].predict(X_test[:, view_B]))
+    best = "A" if evA["f1"] >= evB["f1"] else "B"
+    ev_best = evA if best == "A" else evB
+    print(f"[ETAPA 4] Co-Training: A F1={evA['f1']:.4f} | B F1={evB['f1']:.4f} | melhor={best} "
+          f"(escolhido pelo teste -> viés otimista)")
+    print(f"          Transferidos={co['total_transferred']} Desacordos(distintos)="
+          f"{co['unique_disagreements']} Erros auditados={co['total_audit_errors']} t={t_co:.4f}s")
+    results["step4_co_training"] = {
+        "view_A_cols": view_A, "view_B_cols": view_B,
+        "init_view_A": init["A"], "init_view_B": init["B"],
+        "final_A": evA, "final_B": evB, "best_view": best,
+        "total_transferred": co["total_transferred"],
+        "unique_disagreements": co["unique_disagreements"],
+        "audited_errors": co["total_audit_errors"],
+        "n_LA": co["n_LA"], "n_LB": co["n_LB"],
+        "time_s": t_co, "rounds": co["rounds"],
+    }
+
+    # ---------------- ETAPA 5: LABEL PROPAGATION ----------------
+    lp_results = []
+    lp_k5 = None
+    for k in (3, 5, 15):
+        lp = LabelPropagation(kernel="knn", n_neighbors=k)
+        t0 = time.time(); lp.fit(X_train, y_semi); t_lp = time.time() - t0
+        ev = evaluate(y_test, lp.predict(X_test))
+        pred_U = lp.transduction_[unlabeled_idx]
+        hits = int(np.sum(pred_U == y_U_true))
+        lp_results.append({"k": k, **ev, "hits_u": hits, "total_u": int(n_U),
+                           "acc_u": hits / n_U, "time_s": t_lp})
+        if k == 5:
+            lp_k5 = lp
+        print(f"[ETAPA 5] LP k={k}: F1={ev['f1']:.4f} Acertos em U={hits}/{n_U} "
+              f"({hits / n_U * 100:.1f}%) t={t_lp:.4f}s")
+    results["step5_label_propagation"] = lp_results
+    fig5 = os.path.join(out_dir, f"fig_{name}_etapa5_pca_tsne.png")
+    plot_etapa5(name, X_train, y_train, labeled_idx, lp_k5.transduction_,
+                classes, target_names, fig5)
+    print(f"[ETAPA 5] Figura salva em {fig5}")
+
+    # ---------------- ETAPA 6: LABEL SPREADING / RUÍDO ----------------
+    def run_graph(y_s):
+        out = {}
+        lp_ = LabelPropagation(kernel="knn", n_neighbors=5).fit(X_train, y_s)
+        out["lp"] = (evaluate(y_test, lp_.predict(X_test)), lp_)
+        for a in (0.2, 0.8):
+            t0 = time.time()
+            ls_ = LabelSpreading(kernel="knn", n_neighbors=5, alpha=a).fit(X_train, y_s)
+            t_ = time.time() - t0
+            ev_ = evaluate(y_test, ls_.predict(X_test))
+            ev_["time_s"] = t_
+            out[f"ls_{a}"] = (ev_, ls_)
+        return out
+
+    clean = run_graph(y_semi)
+
+    rng = np.random.RandomState(SEED)
+    n_corrupt = 2 if len(labeled_idx) >= 6 else 1
+    corrupt_idx = rng.choice(labeled_idx, size=n_corrupt, replace=False)
+    original = y_semi[corrupt_idx].copy()
+    y_noisy = y_semi.copy()
+    for i in corrupt_idx:                                  # só L é alterada
+        y_noisy[i] = rng.choice([c for c in classes if c != y_semi[i]])
+    print(f"[ETAPA 6] Sementes corrompidas {corrupt_idx.tolist()}: "
+          f"{original.tolist()} -> {y_noisy[corrupt_idx].tolist()}")
+    noisy = run_graph(y_noisy)
+
+    for tag, res in (("limpas", clean), ("ruidosas", noisy)):
+        print(f"[ETAPA 6] Sementes {tag}: LP F1={res['lp'][0]['f1']:.4f} | "
+              f"LS(α=0,2) F1={res['ls_0.2'][0]['f1']:.4f} | LS(α=0,8) F1={res['ls_0.8'][0]['f1']:.4f}")
+    preds_corrupt = {k: noisy[k][1].transduction_[corrupt_idx].tolist() for k in noisy}
+    print(f"          Predições finais nas sementes corrompidas {preds_corrupt} "
+          f"(rótulo original: {original.tolist()})")
+    results["step6_label_spreading"] = {
+        "clean": {k: v[0] for k, v in clean.items()},
+        "noisy": {k: v[0] for k, v in noisy.items()},
+        "corrupted_indices": corrupt_idx.tolist(),
+        "original_classes": original.tolist(),
+        "noisy_classes": y_noisy[corrupt_idx].tolist(),
+        "pred_on_corrupted_seeds": preds_corrupt,
+    }
+
+    # ---------------- ETAPA 7: ESTRESSE ----------------
+    seeds = (21, 42, 84)
+    fractions = (0.05, 0.10, 0.20)
+    stress = {}
+    for frac in fractions:
+        key = f"{int(round(frac * 100))}%"
+        acc = {"baseline": [], "self_training": [], "label_spreading": []}
+        n_labs = []
+        for s in seeds:
+            y_s, lab = make_semi_labels(y_train, frac, s)
+            n_labs.append(len(lab))
+            m = lr(s).fit(X_train[lab], y_train[lab])
+            acc["baseline"].append(f1_score(y_test, m.predict(X_test), average="macro"))
+            m = SelfTrainingClassifier(lr(s), threshold=0.75, max_iter=10).fit(X_train, y_s)
+            acc["self_training"].append(f1_score(y_test, m.predict(X_test), average="macro"))
+            m = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2).fit(X_train, y_s)
+            acc["label_spreading"].append(f1_score(y_test, m.predict(X_test), average="macro"))
+        stress[key] = {"n_labels_mean": float(np.mean(n_labs)),
+                       **{m: mean_std(v) for m, v in acc.items()}}
+        print(f"[ETAPA 7] {key} (≈{np.mean(n_labs):.0f} rótulos): " + " | ".join(
+            f"{m}={np.mean(v):.4f}±{np.std(v):.4f}" for m, v in acc.items()))
+    fig7 = os.path.join(out_dir, f"fig_{name}_etapa7_curva_f1.png")
+    plot_etapa7(name, stress, fig7)
+    print(f"[ETAPA 7] Figura salva em {fig7}")
+
+    # Perturbação só em U (ruído gaussiano em 20% de U), 10% de rótulos, 3 sementes.
+    # L e teste intactos; nenhum rótulo novo é criado -> simula mudança de distribuição.
+    pert = {"self_training": {"clean": [], "perturbed": []},
+            "label_spreading": {"clean": [], "perturbed": []},
+            "baseline": []}
+    for s in seeds:
+        y_s, lab = make_semi_labels(y_train, 0.10, s)
+        u_idx = np.where(y_s == -1)[0]
+        rng = np.random.RandomState(s)
+        noisy_u = rng.choice(u_idx, size=int(0.20 * len(u_idx)), replace=False)
+        X_pert = X_train.copy()
+        X_pert[noisy_u] += rng.normal(0.0, 0.5, size=X_pert[noisy_u].shape)  # σ=0,5 (dados padronizados)
+
+        m = lr(s).fit(X_train[lab], y_train[lab])     # baseline não usa U: não muda
+        pert["baseline"].append(f1_score(y_test, m.predict(X_test), average="macro"))
+        for tag, Xt in (("clean", X_train), ("perturbed", X_pert)):
+            m = SelfTrainingClassifier(lr(s), threshold=0.75, max_iter=10).fit(Xt, y_s)
+            pert["self_training"][tag].append(f1_score(y_test, m.predict(X_test), average="macro"))
+            m = LabelSpreading(kernel="knn", n_neighbors=5, alpha=0.2).fit(Xt, y_s)
+            pert["label_spreading"][tag].append(f1_score(y_test, m.predict(X_test), average="macro"))
+    pert_summary = {
+        "baseline": mean_std(pert["baseline"]),
+        "self_training": {t: mean_std(v) for t, v in pert["self_training"].items()},
+        "label_spreading": {t: mean_std(v) for t, v in pert["label_spreading"].items()},
+    }
+    print("[ETAPA 7] Perturbação em 20% de U (10% de rótulos, 3 sementes):")
+    print(f"          Baseline (sem U): {pert_summary['baseline']['mean']:.4f}")
+    for m in ("self_training", "label_spreading"):
+        print(f"          {m}: limpo={pert_summary[m]['clean']['mean']:.4f} -> "
+              f"perturbado={pert_summary[m]['perturbed']['mean']:.4f}")
+    results["step7_stress"] = {"curve": stress, "u_perturbation": pert_summary}
+
+    # ---------------- SÍNTESE ----------------
+    ls_clean = clean["ls_0.2"][0]
+    lp5 = lp_results[1]
+    results["consolidated_table"] = [
+        {"model": "Supervisionado — somente L", "f1": ev_few["f1"], "acc": ev_few["acc"],
+         "time": t_few, "cm": ev_few["cm"], "obs": "10% dos rótulos por classe"},
+        {"model": "Supervisionado — todos os rótulos", "f1": ev_full["f1"], "acc": ev_full["acc"],
+         "time": t_full, "cm": ev_full["cm"], "obs": "Teto (100% dos rótulos de treino)"},
+        {"model": "Self-Training (τ=0,75)", "f1": st_075["f1"], "acc": st_075["acc"],
+         "time": st_075["time_s"], "cm": st_075["cm"],
+         "obs": f"{st_075['n_accepted']} pseudorrótulos aceitos"},
+        {"model": "Co-Training — visão A", "f1": evA["f1"], "acc": evA["acc"],
+         "time": t_co, "cm": evA["cm"], "obs": f"{co['total_transferred']} transferidos"},
+        {"model": "Co-Training — visão B", "f1": evB["f1"], "acc": evB["acc"],
+         "time": t_co, "cm": evB["cm"],
+         "obs": f"{co['unique_disagreements']} desacordos, {co['total_audit_errors']} erros auditados"},
+        {"model": "Label Propagation (k=5)", "f1": lp5["f1"], "acc": lp5["acc"],
+         "time": lp5["time_s"], "cm": lp5["cm"],
+         "obs": f"Acertos em U: {lp5['hits_u']}/{lp5['total_u']}"},
+        {"model": "Label Spreading (k=5, α=0,2)", "f1": ls_clean["f1"], "acc": ls_clean["acc"],
+         "time": ls_clean["time_s"], "cm": ls_clean["cm"], "obs": "Difusão com soft clamping"},
+    ]
+    print("\n[SÍNTESE] Resultados consolidados no mesmo teste")
+    print(f"{'Modelo':40s} {'F1':>7s} {'Acc':>7s} {'Tempo(s)':>9s}")
+    for r in results["consolidated_table"]:
+        print(f"{r['model']:40s} {r['f1']:7.4f} {r['acc']:7.4f} {r['time']:9.4f}")
+    return results
+
 
 def main():
-    print("Iniciando bateria completa de experimentos...")
-    results_wine = run_experiment_for_dataset("wine", load_wine, random_state=73)
-    results_cancer = run_experiment_for_dataset("breast_cancer", load_breast_cancer, random_state=73)
-    
-    full_output = {
-        "wine": results_wine,
-        "breast_cancer": results_cancer
-    }
-    
-    with open("experimento_pratico_resultados.json", "w", encoding="utf-8") as f:
-        json.dump(full_output, f, indent=2, ensure_ascii=False)
-        
-    print("\n\nExperimentos finalizados com sucesso! Resultados salvos em experimento_pratico_resultados.json")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=".", help="pasta de saída (JSON e figuras)")
+    args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
+
+    all_results = {name: run_experiment(name, cfg, args.out) for name, cfg in DATASETS.items()}
+    path = os.path.join(args.out, "experimento_pratico_resultados.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False)
+    print(f"\nExperimentos finalizados. Resultados em {path}")
+
 
 if __name__ == "__main__":
     main()
