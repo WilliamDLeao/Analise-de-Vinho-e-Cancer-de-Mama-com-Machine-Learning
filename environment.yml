@@ -1,0 +1,53 @@
+name: ml-env
+channels:
+  - conda-forge
+  - defaults
+  - pytorch
+  - nvidia
+  
+dependencies:
+  - python=3.10
+
+  # Core científico (via conda)
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+
+  # Visualização
+  - matplotlib
+  - seaborn
+  - plotly
+
+  # Jupyter
+  - jupyterlab
+  - notebook
+  - ipykernel
+
+  # Utilidades
+  - tqdm
+  - joblib
+
+  # RL
+  - gymnasium
+
+  # NLP
+  - nltk
+  - spacy
+
+  # Otimização
+  - optuna
+
+  # Stream learning
+  - river   # <-- mover para cá
+
+  # pip apenas quando necessário
+  - pip
+  - pip:
+      - tensorflow[and-cuda]
+      - keras
+      - tensorboard
+      - snorkel
+      - mlflow
+      - openpyxl
+      - xlrd

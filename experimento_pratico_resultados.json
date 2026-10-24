@@ -1,0 +1,625 @@
+{
+  "wine": {
+    "dataset": {
+      "dataset_name": "wine",
+      "n_samples": 178,
+      "n_features": 13,
+      "classes": [
+        "class_0",
+        "class_1",
+        "class_2"
+      ],
+      "class_distribution": {
+        "class_0": 59,
+        "class_1": 71,
+        "class_2": 48
+      },
+      "missing_values": 0
+    },
+    "step1_split": {
+      "n_train": 142,
+      "n_test": 36,
+      "n_L": 15,
+      "n_U": 127
+    },
+    "step2_baseline": {
+      "full_f1": 1.0,
+      "full_acc": 1.0,
+      "full_time": 0.011997222900390625,
+      "few_f1": 0.8850170502983802,
+      "few_acc": 0.8888888888888888,
+      "few_time": 0.0035402774810791016,
+      "cm_few": [
+        [
+          11,
+          1,
+          0
+        ],
+        [
+          0,
+          14,
+          0
+        ],
+        [
+          0,
+          3,
+          7
+        ]
+      ]
+    },
+    "step3_self_training": [
+      {
+        "threshold": 0.6,
+        "f1_score": 1.0,
+        "accuracy": 1.0,
+        "n_accepted": 127,
+        "total_u": 127,
+        "coverage_ratio": 1.0,
+        "precision_accepted": 0.9763779527559056,
+        "n_iter": 3,
+        "time_s": 0.01885819435119629
+      },
+      {
+        "threshold": 0.75,
+        "f1_score": 1.0,
+        "accuracy": 1.0,
+        "n_accepted": 124,
+        "total_u": 127,
+        "coverage_ratio": 0.9763779527559056,
+        "precision_accepted": 1.0,
+        "n_iter": 7,
+        "time_s": 0.03456282615661621
+      },
+      {
+        "threshold": 0.95,
+        "f1_score": 0.9709618874773139,
+        "accuracy": 0.9722222222222222,
+        "n_accepted": 81,
+        "total_u": 127,
+        "coverage_ratio": 0.6377952755905512,
+        "precision_accepted": 1.0,
+        "n_iter": 9,
+        "time_s": 0.03739428520202637
+      }
+    ],
+    "step4_co_training": {
+      "view_A_init_f1": 0.9474747474747475,
+      "view_B_init_f1": 0.8275401069518716,
+      "final_f1_A": 0.9474747474747475,
+      "final_f1_B": 0.724074074074074,
+      "best_f1": 0.9474747474747475,
+      "best_acc": 0.9444444444444444,
+      "best_view": "A",
+      "total_transferred": 27,
+      "disagreements": 0,
+      "audited_errors": 1,
+      "time_s": 0.021372079849243164,
+      "rounds": [
+        {
+          "round": 1,
+          "transferred_round": 9,
+          "pool_U_remaining": 118,
+          "disagreements": 0
+        },
+        {
+          "round": 2,
+          "transferred_round": 9,
+          "pool_U_remaining": 109,
+          "disagreements": 0
+        },
+        {
+          "round": 3,
+          "transferred_round": 9,
+          "pool_U_remaining": 100,
+          "disagreements": 0
+        }
+      ]
+    },
+    "step5_label_propagation": [
+      {
+        "k": 3,
+        "f1_score": 0.7492078333593061,
+        "accuracy": 0.75,
+        "hits_u": "77/127",
+        "acc_u": 0.6062992125984252,
+        "time_s": 0.0056760311126708984
+      },
+      {
+        "k": 5,
+        "f1_score": 0.9487179487179488,
+        "accuracy": 0.9444444444444444,
+        "hits_u": "120/127",
+        "acc_u": 0.9448818897637795,
+        "time_s": 0.004560232162475586
+      },
+      {
+        "k": 15,
+        "f1_score": 1.0,
+        "accuracy": 1.0,
+        "hits_u": "114/127",
+        "acc_u": 0.8976377952755905,
+        "time_s": 0.0037789344787597656
+      }
+    ],
+    "step6_label_spreading": {
+      "clean": {
+        "propagation_f1": 0.9487179487179488,
+        "spreading_02_f1": 0.974320987654321,
+        "spreading_08_f1": 0.974320987654321
+      },
+      "noisy": {
+        "propagation_f1": 0.543859649122807,
+        "spreading_02_f1": 0.543859649122807,
+        "spreading_08_f1": 0.543859649122807,
+        "corrupted_indices": [
+          118,
+          91
+        ],
+        "original_classes": [
+          1,
+          1
+        ],
+        "noisy_classes": [
+          2,
+          0
+        ],
+        "pred_corrupt_02": [
+          2,
+          0
+        ],
+        "pred_corrupt_08": [
+          2,
+          0
+        ]
+      }
+    },
+    "step7_stress": {
+      "multi_seed_fractions": {
+        "5%": {
+          "baseline": {
+            "mean": 0.954917911414663,
+            "std": 0.04660374129078671,
+            "runs": [
+              0.8907407407407407,
+              1.0,
+              0.9740129935032483
+            ]
+          },
+          "self_training": {
+            "mean": 1.0,
+            "std": 0.0,
+            "runs": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "label_spreading": {
+            "mean": 0.7757309941520467,
+            "std": 0.1862960933484877,
+            "runs": [
+              1.0,
+              0.543859649122807,
+              0.7833333333333333
+            ]
+          }
+        },
+        "10%": {
+          "baseline": {
+            "mean": 0.9816582936601875,
+            "std": 0.013029222427229084,
+            "runs": [
+              0.9709618874773139,
+              0.9740129935032483,
+              1.0
+            ]
+          },
+          "self_training": {
+            "mean": 1.0,
+            "std": 0.0,
+            "runs": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "label_spreading": {
+            "mean": 1.0,
+            "std": 0.0,
+            "runs": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "20%": {
+          "baseline": {
+            "mean": 0.9742445620223399,
+            "std": 0.02106049701728678,
+            "runs": [
+              1.0,
+              0.9484126984126985,
+              0.974320987654321
+            ]
+          },
+          "self_training": {
+            "mean": 1.0,
+            "std": 0.0,
+            "runs": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "label_spreading": {
+            "mean": 1.0,
+            "std": 0.0,
+            "runs": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "u_perturbation": {
+        "st_clean_f1": 1.0,
+        "st_perturbed_f1": 1.0,
+        "ls_clean_f1": 0.974320987654321,
+        "ls_perturbed_f1": 0.9487179487179488
+      }
+    },
+    "consolidated_table": [
+      {
+        "model": "Supervisionado - somente L",
+        "f1": 0.8850170502983802,
+        "acc": 0.8888888888888888,
+        "time": 0.0035402774810791016,
+        "obs": "Apenas 10% dos rótulos por classe (baseline restrito)"
+      },
+      {
+        "model": "Supervisionado - todos os rótulos",
+        "f1": 1.0,
+        "acc": 1.0,
+        "time": 0.011997222900390625,
+        "obs": "Teto teórico (oráculo com 100% dos rótulos de treino)"
+      },
+      {
+        "model": "Self-Training (tau=0.75)",
+        "f1": 1.0,
+        "acc": 1.0,
+        "time": 0.03456282615661621,
+        "obs": "124 pseudorrótulos aceitos (100.0% precisão)"
+      },
+      {
+        "model": "Co-Training - visão A",
+        "f1": 0.9474747474747475,
+        "acc": 0.9444444444444444,
+        "time": 0.021372079849243164,
+        "obs": "27 amostras transferidas, 0 discordâncias"
+      },
+      {
+        "model": "Label Propagation (k=5)",
+        "f1": 0.9487179487179488,
+        "acc": 0.9444444444444444,
+        "time": 0.004560232162475586,
+        "obs": "Acertos em U: 120/127 (94.5%)"
+      },
+      {
+        "model": "Label Spreading (k=5, alpha=0.2)",
+        "f1": 0.974320987654321,
+        "acc": 0.9722222222222222,
+        "time": 0.0037789344787597656,
+        "obs": "Difusão com regularização e soft clamping"
+      }
+    ]
+  },
+  "breast_cancer": {
+    "dataset": {
+      "dataset_name": "breast_cancer",
+      "n_samples": 569,
+      "n_features": 30,
+      "classes": [
+        "malignant",
+        "benign"
+      ],
+      "class_distribution": {
+        "malignant": 212,
+        "benign": 357
+      },
+      "missing_values": 0
+    },
+    "step1_split": {
+      "n_train": 455,
+      "n_test": 114,
+      "n_L": 45,
+      "n_U": 410
+    },
+    "step2_baseline": {
+      "full_f1": 0.9905276277523889,
+      "full_acc": 0.9912280701754386,
+      "full_time": 0.006374359130859375,
+      "few_f1": 0.9614864864864865,
+      "few_acc": 0.9649122807017544,
+      "few_time": 0.0025970935821533203,
+      "cm_few": [
+        [
+          38,
+          4
+        ],
+        [
+          0,
+          72
+        ]
+      ]
+    },
+    "step3_self_training": [
+      {
+        "threshold": 0.6,
+        "f1_score": 0.951575906889814,
+        "accuracy": 0.956140350877193,
+        "n_accepted": 407,
+        "total_u": 410,
+        "coverage_ratio": 0.9926829268292683,
+        "precision_accepted": 0.9533169533169533,
+        "n_iter": 4,
+        "time_s": 0.01803874969482422
+      },
+      {
+        "threshold": 0.75,
+        "f1_score": 0.9313666465984347,
+        "accuracy": 0.9385964912280702,
+        "n_accepted": 399,
+        "total_u": 410,
+        "coverage_ratio": 0.973170731707317,
+        "precision_accepted": 0.9774436090225563,
+        "n_iter": 7,
+        "time_s": 0.024049758911132812
+      },
+      {
+        "threshold": 0.95,
+        "f1_score": 0.9313666465984347,
+        "accuracy": 0.9385964912280702,
+        "n_accepted": 360,
+        "total_u": 410,
+        "coverage_ratio": 0.8780487804878049,
+        "precision_accepted": 0.9861111111111112,
+        "n_iter": 6,
+        "time_s": 0.019364356994628906
+      }
+    ],
+    "step4_co_training": {
+      "view_A_init_f1": 0.9117571170551303,
+      "view_B_init_f1": 0.9715828832571666,
+      "final_f1_A": 0.9117571170551303,
+      "final_f1_B": 0.9715828832571666,
+      "best_f1": 0.9715828832571666,
+      "best_acc": 0.9736842105263158,
+      "best_view": "B",
+      "total_transferred": 20,
+      "disagreements": 0,
+      "audited_errors": 0,
+      "time_s": 0.013564109802246094,
+      "rounds": [
+        {
+          "round": 1,
+          "transferred_round": 6,
+          "pool_U_remaining": 404,
+          "disagreements": 0
+        },
+        {
+          "round": 2,
+          "transferred_round": 7,
+          "pool_U_remaining": 397,
+          "disagreements": 0
+        },
+        {
+          "round": 3,
+          "transferred_round": 7,
+          "pool_U_remaining": 390,
+          "disagreements": 0
+        }
+      ]
+    },
+    "step5_label_propagation": [
+      {
+        "k": 3,
+        "f1_score": 0.8421052631578947,
+        "accuracy": 0.8596491228070176,
+        "hits_u": "361/410",
+        "acc_u": 0.8804878048780488,
+        "time_s": 0.03310108184814453
+      },
+      {
+        "k": 5,
+        "f1_score": 0.8891736632788334,
+        "accuracy": 0.9035087719298246,
+        "hits_u": "390/410",
+        "acc_u": 0.9512195121951219,
+        "time_s": 0.0077631473541259766
+      },
+      {
+        "k": 15,
+        "f1_score": 0.7955639452571968,
+        "accuracy": 0.8333333333333334,
+        "hits_u": "357/410",
+        "acc_u": 0.8707317073170732,
+        "time_s": 0.008623361587524414
+      }
+    ],
+    "step6_label_spreading": {
+      "clean": {
+        "propagation_f1": 0.8891736632788334,
+        "spreading_02_f1": 0.8891736632788334,
+        "spreading_08_f1": 0.8891736632788334
+      },
+      "noisy": {
+        "propagation_f1": 0.8891736632788334,
+        "spreading_02_f1": 0.861842105263158,
+        "spreading_08_f1": 0.8891736632788334,
+        "corrupted_indices": [
+          441,
+          243
+        ],
+        "original_classes": [
+          1,
+          1
+        ],
+        "noisy_classes": [
+          0,
+          0
+        ],
+        "pred_corrupt_02": [
+          0,
+          0
+        ],
+        "pred_corrupt_08": [
+          0,
+          0
+        ]
+      }
+    },
+    "step7_stress": {
+      "multi_seed_fractions": {
+        "5%": {
+          "baseline": {
+            "mean": 0.9038473614438217,
+            "std": 0.013137067086426518,
+            "runs": [
+              0.9210526315789473,
+              0.8891736632788334,
+              0.9013157894736843
+            ]
+          },
+          "self_training": {
+            "mean": 0.904229299129698,
+            "std": 0.01064594220522165,
+            "runs": [
+              0.9117571170551303,
+              0.8891736632788334,
+              0.9117571170551303
+            ]
+          },
+          "label_spreading": {
+            "mean": 0.86777718478572,
+            "std": 0.019607999840847014,
+            "runs": [
+              0.8441345365053323,
+              0.8670494303400018,
+              0.8921475875118259
+            ]
+          }
+        },
+        "10%": {
+          "baseline": {
+            "mean": 0.9430088245232598,
+            "std": 0.01418643639912229,
+            "runs": [
+              0.922972972972973,
+              0.9539245008487591,
+              0.9521289997480473
+            ]
+          },
+          "self_training": {
+            "mean": 0.9359286388496386,
+            "std": 0.027945217055255257,
+            "runs": [
+              0.9037162162162162,
+              0.9718634306869601,
+              0.9322062696457395
+            ]
+          },
+          "label_spreading": {
+            "mean": 0.9074444403391771,
+            "std": 0.009638235565698868,
+            "runs": [
+              0.8999648999648999,
+              0.9210526315789473,
+              0.9013157894736843
+            ]
+          }
+        },
+        "20%": {
+          "baseline": {
+            "mean": 0.9715115167102343,
+            "std": 0.007617252793668658,
+            "runs": [
+              0.9712773998488284,
+              0.9623015873015872,
+              0.9809555629802873
+            ]
+          },
+          "self_training": {
+            "mean": 0.9648519520767133,
+            "std": 0.004759487081398564,
+            "runs": [
+              0.9614864864864865,
+              0.9715828832571666,
+              0.9614864864864865
+            ]
+          },
+          "label_spreading": {
+            "mean": 0.9186468486772981,
+            "std": 0.004128622495756314,
+            "runs": [
+              0.912836632401665,
+              0.9210526315789473,
+              0.9220512820512821
+            ]
+          }
+        }
+      },
+      "u_perturbation": {
+        "st_clean_f1": 0.9313666465984347,
+        "st_perturbed_f1": 0.951575906889814,
+        "ls_clean_f1": 0.8891736632788334,
+        "ls_perturbed_f1": 0.8891736632788334
+      }
+    },
+    "consolidated_table": [
+      {
+        "model": "Supervisionado - somente L",
+        "f1": 0.9614864864864865,
+        "acc": 0.9649122807017544,
+        "time": 0.0025970935821533203,
+        "obs": "Apenas 10% dos rótulos por classe (baseline restrito)"
+      },
+      {
+        "model": "Supervisionado - todos os rótulos",
+        "f1": 0.9905276277523889,
+        "acc": 0.9912280701754386,
+        "time": 0.006374359130859375,
+        "obs": "Teto teórico (oráculo com 100% dos rótulos de treino)"
+      },
+      {
+        "model": "Self-Training (tau=0.75)",
+        "f1": 0.9313666465984347,
+        "acc": 0.9385964912280702,
+        "time": 0.024049758911132812,
+        "obs": "399 pseudorrótulos aceitos (97.7% precisão)"
+      },
+      {
+        "model": "Co-Training - visão B",
+        "f1": 0.9715828832571666,
+        "acc": 0.9736842105263158,
+        "time": 0.013564109802246094,
+        "obs": "20 amostras transferidas, 0 discordâncias"
+      },
+      {
+        "model": "Label Propagation (k=5)",
+        "f1": 0.8891736632788334,
+        "acc": 0.9035087719298246,
+        "time": 0.0077631473541259766,
+        "obs": "Acertos em U: 390/410 (95.1%)"
+      },
+      {
+        "model": "Label Spreading (k=5, alpha=0.2)",
+        "f1": 0.8891736632788334,
+        "acc": 0.9035087719298246,
+        "time": 0.008623361587524414,
+        "obs": "Difusão com regularização e soft clamping"
+      }
+    ]
+  }
+}
